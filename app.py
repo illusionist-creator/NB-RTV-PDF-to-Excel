@@ -645,7 +645,7 @@ def main():
                 df, errors = process_prn_files(prn_files)
                 
                 progress_bar.progress(100)
-                status_text.text("Processing completed!")
+                status_text.text("Processing complete!")
                 
                 st.session_state.prn_data = df
                 st.session_state.prn_errors = errors
@@ -683,7 +683,7 @@ def main():
                 </div>
                 """, unsafe_allow_html=True)
             
-            st.markdown(f'<div class="success-box">✅ Successfully processed {len(st.session_state.prn_files)} PRN file(s) and extracted {len(df)} product records!</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="success-box">✅ Successfully processed {len(st.session_state.prn_files)} PRN file(s) and extracted {len(df)} return records!</div>', unsafe_allow_html=True)
             
             # Data preview
             with st.expander("📊 View Extracted PRN Data", expanded=True):
@@ -691,7 +691,7 @@ def main():
             
             # Download Excel
             output = BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False, sheet_name='PRN_Data')
             excel_data = output.getvalue()
             
@@ -712,5 +712,14 @@ def main():
                 for error in st.session_state.prn_errors:
                     st.error(error)
 
-if __name__ == '__main__':
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    <div style='text-align: center; color: #888; padding: 20px;'>
+        <p>🏪 Nature's Basket PDF Parser | Built with Streamlit</p>
+        <p>Upload your PDF documents and get organized Excel data in seconds!</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+if __name__ == "__main__":
     main()
