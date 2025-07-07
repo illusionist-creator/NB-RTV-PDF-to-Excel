@@ -297,45 +297,166 @@ def parse_grn_text(text: str) -> Dict[str, Any]:
     return result
 
 # PRN Parser Functions
+# PRN Parser Functions
 def parse_prn_documents(text: str) -> List[Dict[str, Any]]:
-    """Parse PRN documents from text"""
-    meta_patterns = {
-        "store": re.compile(r"(NB [^\n]+)"),
-        "vendor_code": re.compile(r"Vendor Code\s*:([^\n]+)"),
-        "vendor_name": re.compile(r"Vendor Name\s*:([^\n]+)"),
-        "doc_no": re.compile(r"Doc No\s*:([^\n]+)"),
-        "invoice_date": re.compile(r"Invoice Date\s*:([^\n]+)"),
-        "order_no": re.compile(r"Order No\s*:([^\n]+)"),
-        "order_date": re.compile(r"Order Date\s*:([^\n]+)"),
-        "pslip_no": re.compile(r"P\.Slip No\.\s*:([^\n]+)")
-    }
-    
-    # Line item pattern
-    line_item_pattern = re.compile(
-        r"(?P<sno>\d+)\s+(?P<article_code>\d+)\s+(?P<ean_code>\d+)\s+(?P<ref_po>\d+)\s+"
-        r"(?P<qty>\d+\.\d+)\s+(?P<uom>\w+)\s+(?P<mrp>\d+\.\d+)\s+(?P<cost>\d+\.\d+)\s+"
-        r"(?P<value>\d+\.\d+)\s+(?P<reason>\d+)\s+(?P<sgst>\d+\.\d+)\s+(?P<cgst>\d+\.\d+)\s+(?P<netval>\d+\.\d+)\s+"
-        r"TBD (?P<desc>.+?)\s+(?P<hsn>\d{8})\s+Date expired", re.DOTALL
-    )
-    
+    """Parse PRN documents from text - handles Goods Return Delivery Challan format"""
     all_records = []
     
     # Split the text into individual delivery challans
     documents = text.split("GOODS RETURN DELIVERY CHALLAN")
     
     # Process each document
-    for doc in documents[1:]:  # Skip the initial header
-        # Extract metadata
-        metadata = {}
-        for key, pattern in meta_patterns.items():
-            match = pattern.search(doc)
-            metadata[key] = match.group(1).strip() if match else None
-        
-        # Extract line items
-        for match in line_item_pattern.finditer(doc):
-            item_data = match.groupdict()
-            record = {**metadata, **item_data}
-            all_records.append(record)
+    for doc_idx, doc in enumerate(documents[1:], 1):  # Skip the initial header
+        try:
+            # Extract metadata using more flexible patterns
+            metadata = {}
+            
+            # Store name - look for NB followed by location
+            store_match = re.search(r'NB ([^\n]+?)(?=\n|NATURE)', doc, re.IGNORECASE)
+            if store_match:
+                metadata['store'] = store_match.group(1).strip()
+            
+            # Vendor code
+            vendor_code_match = re.search(r'Vendor Code\s*:([^\n]+)', doc)
+            if vendor_code_match:
+                metadata['vendor_code'] = vendor_code_match.group(1).strip()
+            
+            # Vendor name
+            vendor_name_match = re.search(r'Vendor Name\s*:([^\n]+)', doc)
+            if vendor_name_match:
+                metadata['vendor_name'] = vendor_name_match.group(1).strip()
+            
+            # Vendor address
+            address_match = re.search(r'Address\s*:([^\n:]+(?:\n[^\n:]+)*?)(?=GSTIN|Vendor Code|\n\s*:)', doc, re.DOTALL)
+            if address_match:
+                address_lines = [line.strip() for line in address_match.group(1).split('\n') if line.strip() and not line.strip().startswith(':')]
+                metadata['vendor_address'] = ' '.join(address_lines)
+            
+            # GST numbers
+            gstin_matches = re.findall(r'GSTIN\s*:([^\s\n]+)', doc)
+            if len(gstin_matches) >= 2:
+                metadata['vendor_gstin'] = gstin_matches[0].strip()
+                metadata['company_gstin'] = gstin_matches[1].strip()
+            elif len(gstin_matches) == 1:
+                metadata['vendor_gstin'] = gstin_matches[0].strip()
+            
+            # Document details
+            doc_no_match = re.search(r'Doc No\s*:([^\n/]+)', doc)
+            if doc_no_match:
+                metadata['doc_no'] = doc_no_match.group(1).strip()
+            
+            # Reference document number
+            ref_doc_match = re.search(r'Ref\.Doc\.No\s*:([^\n/]+)', doc)
+            if ref_doc_match:
+                metadata['ref_doc_no'] = ref_doc_match.group(1).strip()
+            
+            # Invoice date
+            invoice_date_match = re.search(r'Invoice Date\s*:([^\n]+)', doc)
+            if invoice_date_match:
+                metadata['invoice_date'] = invoice_date_match.group(1).strip()
+            
+            # Order details
+            order_no_match = re.search(r'Order No\s*:([^\n]+)', doc)
+            if order_no_match:
+                metadata['order_no'] = order_no_match.group(1).strip()
+            
+            order_date_match = re.search(r'Order Date\s*:([^\n]+)', doc)
+            if order_date_match:
+                metadata['order_date'] = order_date_match.group(1).strip()
+            
+            # P.Slip No
+            pslip_match = re.search(r'P\.Slip No\.\s*:([^\n]+)', doc)
+            if pslip_match:
+                metadata['pslip_no'] = pslip_match.group(1).strip()
+            
+            # Extract totals
+            total_match = re.search(r'TOTAL\s+([\d.]+)\s+([\d.]+)', doc)
+            if total_match:
+                metadata['total_qty'] = total_match.group(1).strip()
+                metadata['total_value'] = total_match.group(2).strip()
+            
+            # Final value
+            final_value_match = re.search(r'FINAL VALUE\s+([\d.]+)', doc)
+            if final_value_match:
+                metadata['final_value'] = final_value_match.group(1).strip()
+            
+            # Extract line items using more flexible pattern
+            lines = doc.split('\n')
+            
+            i = 0
+            while i < len(lines):
+                line = lines[i].strip()
+                
+                # Look for line items that start with serial number
+                if re.match(r'^\d+\s+\d{7}', line):
+                    try:
+                        # Parse the main line
+                        parts = line.split()
+                        if len(parts) >= 10:  # Minimum required fields
+                            
+                            # Create product record
+                            product = {
+                                'sno': parts[0],
+                                'article_code': parts[1],
+                                'ean_code': parts[2],
+                                'ref_po': parts[3],
+                                'qty': parts[4],
+                                'uom': parts[5],
+                                'mrp': parts[6],
+                                'cost': parts[7],
+                                'value': parts[8],
+                                'reason': parts[9],
+                                'sgst': parts[10] if len(parts) > 10 else '0.00',
+                                'cgst': parts[11] if len(parts) > 11 else '0.00',
+                                'igst': parts[12] if len(parts) > 12 else '0.00',
+                                'gst_cess': parts[13] if len(parts) > 13 else '0.00',
+                                'adv_cess': parts[14] if len(parts) > 14 else '0.00',
+                                'net_val': parts[15] if len(parts) > 15 else parts[8],  # Use value if net_val not available
+                                'description': '',
+                                'hsn_code': ''
+                            }
+                            
+                            # Look for description in the next line
+                            if i + 1 < len(lines):
+                                next_line = lines[i + 1].strip()
+                                if next_line.startswith('TBD'):
+                                    desc_parts = next_line.split()
+                                    if len(desc_parts) > 1:
+                                        # Extract description (everything after TBD)
+                                        desc_text = ' '.join(desc_parts[1:])
+                                        product['description'] = desc_text
+                                        
+                                        # Look for HSN code in the next line
+                                        if i + 2 < len(lines):
+                                            hsn_line = lines[i + 2].strip()
+                                            if re.match(r'^\d{8}', hsn_line):
+                                                hsn_parts = hsn_line.split()
+                                                product['hsn_code'] = hsn_parts[0]
+                                                # Add reason if available
+                                                if len(hsn_parts) > 1:
+                                                    product['return_reason'] = ' '.join(hsn_parts[1:])
+                                            elif 'Date expired' in hsn_line:
+                                                product['return_reason'] = 'Date expired'
+                                                # Try to extract HSN from the description line
+                                                hsn_match = re.search(r'(\d{8})', desc_text)
+                                                if hsn_match:
+                                                    product['hsn_code'] = hsn_match.group(1)
+                                                    # Clean description
+                                                    product['description'] = desc_text.replace(hsn_match.group(1), '').strip()
+                            
+                            # Combine metadata and product data
+                            record = {**metadata, **product}
+                            all_records.append(record)
+                            
+                    except (IndexError, ValueError) as e:
+                        # Skip malformed lines
+                        continue
+                
+                i += 1
+                
+        except Exception as e:
+            # Log the error but continue processing other documents
+            continue
     
     return all_records
 
